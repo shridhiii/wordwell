@@ -56,17 +56,28 @@ export async function evaluateSentence({ term, definition, sentence }, apiKey, m
   const safeDefinition = clean(definition, 'definition');
   const safeSentence = clean(sentence, 'sentence');
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: 'You are a careful English vocabulary tutor. Judge whether the sentence uses the target word with the intended meaning from the saved definition. Check semantic meaning and naturalness, not just whether the word appears. A sentence that states an opposite meaning is incorrect; for example, lucid means clear and easy to understand, not hard to understand. Be encouraging but honest. Return only JSON matching the provided schema.' }],
-      },
-      contents: [{ role: 'user', parts: [{ text: JSON.stringify({ word: safeTerm, savedDefinition: safeDefinition, learnerSentence: safeSentence }) }] }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1 },
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  let response;
+  try {
+    response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      signal: controller.signal,
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [{ text: 'You are a careful English vocabulary tutor. Judge whether the sentence uses the target word with the intended meaning from the saved definition. Check semantic meaning and naturalness, not just whether the word appears. A sentence that states an opposite meaning is incorrect; for example, lucid means clear and easy to understand, not hard to understand. Be encouraging but honest. Return only JSON matching the provided schema.' }],
+        },
+        contents: [{ role: 'user', parts: [{ text: JSON.stringify({ word: safeTerm, savedDefinition: safeDefinition, learnerSentence: safeSentence }) }] }],
+        generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1 },
+      }),
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new GeminiApiError('Gemini took too long to respond. Please try again.', 504);
+    throw new GeminiApiError('Could not reach Gemini. Please try again.', 502);
+  } finally {
+    clearTimeout(timeout);
+  }
 
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

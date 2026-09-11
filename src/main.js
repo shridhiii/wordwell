@@ -122,10 +122,13 @@ async function checkSentence(e) {
   const button = form.querySelector('button[type="submit"]');
   button.disabled = true;
   button.textContent = 'Checking…';
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const response = await fetch('/api/check-sentence', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({ term: word.term, definition: word.definition, sentence: text }),
     });
     const result = await response.json().catch(() => ({}));
@@ -141,7 +144,9 @@ async function checkSentence(e) {
   } catch (error) {
     button.disabled = false;
     button.textContent = 'Check my sentence  →';
-    showToast(error.message || 'Could not check that sentence.');
+    showToast(error.name === 'AbortError' ? 'The checker timed out. Please try again.' : error.message || 'Could not check that sentence.');
+  } finally {
+    clearTimeout(timeout);
   }
 }
 function showWord(id) { const w=words.find(x=>x.id===id); if(!w) return; activeTab='words'; app.innerHTML=`<main><section class="page detail"><button class="back" data-tab="words">← My words</button><p class="eyebrow">YOUR WORD</p><h1>${escape(w.term)}</h1><div class="definition"><span>YOUR DEFINITION</span><p>${escape(w.definition)}</p></div>${w.note?`<div class="note"><span>NOTE</span><p>${escape(w.note)}</p></div>`:''}<button class="secondary wide" id="practice-one">Practice this word  →</button></section></main>${nav()}<div class="toast" id="toast"></div>`; bindEvents(); document.querySelector('#practice-one').onclick=()=>{reviewQueue=[w];reviewIndex=0;activeTab='review';render();}; }
