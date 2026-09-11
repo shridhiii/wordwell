@@ -20,10 +20,26 @@ const dailyWordPool = [
   ['vivid', 'Producing strong, clear images or impressions.'],
   ['coherent', 'Logical, consistent, and easy to understand.'],
   ['versatile', 'Able to adapt to many different uses or activities.'],
+  ['candid', 'Truthful and direct, even when it may be uncomfortable.'],
+  ['compassionate', 'Showing concern for someone who is suffering.'],
+  ['deliberate', 'Done consciously and intentionally.'],
+  ['formidable', 'Inspiring fear or respect because of strength or ability.'],
+  ['insightful', 'Showing a deep understanding of something.'],
+  ['legitimate', 'Conforming to the law or accepted standards.'],
+  ['obsolete', 'No longer useful because something newer exists.'],
+  ['profound', 'Very great, intense, or meaningful.'],
+  ['skeptical', 'Not easily convinced; questioning what is claimed.'],
+  ['tactful', 'Careful not to offend or upset others.'],
+  ['tenacious', 'Persistent and determined to achieve a goal.'],
+  ['unprecedented', 'Never done or known before.'],
+  ['whimsical', 'Playfully unusual or imaginative.'],
+  ['contemplate', 'To think about something carefully for a while.'],
+  ['articulate', 'Able to express ideas clearly and effectively.'],
 ];
 
 let words = [];
 let currentUser = null;
+let dailyClaimedToday = false;
 let authMode = 'login';
 let authMessage = '';
 let activeTab = 'home';
@@ -55,7 +71,7 @@ const greeting = () => new Date().getHours() < 12 ? 'Good morning' : new Date().
 
 function nav() {
   return `<nav class="bottom-nav">
-    ${[['home','⌂','Today'],['words','☷','My words'],['add','＋','Add word']].map(([id,icon,label]) => `<button class="nav-item ${activeTab===id?'active':''}" data-tab="${id}"><span>${icon}</span>${label}</button>`).join('')}
+    ${[['home','⌂','Today'],['words','☷','My words'],['recommend','✦','Discover'],['add','＋','Add word']].map(([id,icon,label]) => `<button class="nav-item ${activeTab===id?'active':''}" data-tab="${id}"><span>${icon}</span>${label}</button>`).join('')}
   </nav>`;
 }
 
@@ -65,7 +81,7 @@ function render() {
     bindEvents();
     return;
   }
-  const views = { home: homeView, words: wordsView, add: addView, review: reviewView };
+  const views = { home: homeView, words: wordsView, recommend: recommendationsView, add: addView, review: reviewView };
   app.innerHTML = `<main>${views[activeTab]()}</main>${activeTab !== 'review' ? nav() : ''}<div class="toast" id="toast"></div>`;
   bindEvents();
 }
@@ -114,6 +130,27 @@ function wordsView() {
   </section>`;
 }
 
+function dailyMarkerKey() { return currentUser ? `wordwell-daily-${currentUser.id}` : 'wordwell-daily'; }
+function todayKey() { return new Date().toISOString().slice(0, 10); }
+function dailyRecommendations() {
+  const dayNumber = Math.floor(Date.now() / 86400000);
+  const picks = [];
+  for (let offset = 0; picks.length < 3 && offset < dailyWordPool.length; offset += 1) {
+    const [term, definition] = dailyWordPool[(dayNumber * 3 + offset) % dailyWordPool.length];
+    if (!words.some(word => word.term.toLowerCase() === term)) picks.push({ term, definition });
+  }
+  return picks;
+}
+
+function recommendationsView() {
+  const claimed = dailyClaimedToday || localStorage.getItem(dailyMarkerKey()) === todayKey();
+  const picks = claimed ? [] : dailyRecommendations();
+  return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR DAILY GROWTH</p><h1>Discover</h1></div><div class="discover-spark">✦</div></header>
+    <p class="discover-lede">Three thoughtful words, once a day. Choose the ones you want to plant.</p>
+    ${claimed ? `<div class="daily-complete"><span>✦</span><h3>You’ve planted today’s words.</h3><p>Come back tomorrow for three new recommendations.</p></div>` : picks.length ? `<div class="recommendation-list">${picks.map(word => `<article class="recommendation"><div class="word-marker level-0">✦</div><div><h3>${escape(word.term)}</h3><p>${escape(word.definition)}</p></div></article>`).join('')}</div><button class="primary wide" id="claim-daily">Plant these 3 words  →</button>` : `<div class="daily-complete"><span>✦</span><h3>Your garden is flourishing.</h3><p>We’ll have more recommendations soon.</p></div>`}
+  </section>`;
+}
+
 function wordRows(items) {
   if (!items.length) return `<div class="empty"><div>✦</div><h3>No matches yet</h3><p>Add a new word to begin your collection.</p></div>`;
   return items.sort((a,b)=>a.term.localeCompare(b.term)).map(w => `<article class="word-row" data-word="${w.id}"><div class="word-marker level-${w.level}">${w.level >= 2 ? '✓' : '•'}</div><div><h3>${escape(w.term)}</h3><p>${escape(w.definition)}</p></div><span>›</span></article>`).join('');
@@ -149,6 +186,7 @@ function bindEvents() {
   document.querySelector('#auth-form')?.addEventListener('submit', submitAuth);
   document.querySelector('#toggle-auth')?.addEventListener('click', () => { authMode = authMode === 'login' ? 'signup' : 'login'; authMessage = ''; render(); });
   document.querySelector('#sign-out')?.addEventListener('click', signOut);
+  document.querySelector('#claim-daily')?.addEventListener('click', claimDailyWords);
   document.querySelectorAll('[data-tab]').forEach(el => el.onclick = () => { activeTab=el.dataset.tab; render(); });
   document.querySelector('#start-review')?.addEventListener('click', () => { reviewQueue = dueWords(); reviewIndex=0; activeTab='review'; meaningRevealed=false; render(); });
   document.querySelector('#close-review')?.addEventListener('click', () => { activeTab='home'; render(); });
@@ -172,7 +210,7 @@ async function submitAuth(e) {
   button.textContent = authMode === 'login' ? 'Signing in…' : 'Creating account…';
   const result = authMode === 'login'
     ? await supabase.auth.signInWithPassword({ email, password })
-    : await supabase.auth.signUp({ email, password });
+    : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
   button.disabled = false;
   if (result.error) { authMessage = result.error.message; render(); return; }
   if (authMode === 'signup' && !result.data.session) {
@@ -185,8 +223,26 @@ async function signOut() {
   await supabase?.auth.signOut();
   currentUser = null;
   words = [];
+  dailyClaimedToday = false;
   activeTab = 'home';
   render();
+}
+
+async function claimDailyWords() {
+  if (dailyClaimedToday) return showToast('Today’s three words are already planted.');
+  const picks = dailyRecommendations();
+  if (!picks.length) return showToast('No new words are available today.');
+  if (supabase && currentUser) {
+    const { error } = await supabase.from('daily_claims').insert({ user_id: currentUser.id, day: todayKey() });
+    if (error) { dailyClaimedToday = true; render(); return showToast('Today’s words are already planted.'); }
+  }
+  words.push(...picks.map(({ term, definition }) => ({ id: crypto.randomUUID(), term, definition, note: 'Daily recommendation', level: 0, nextReview: Date.now() })));
+  localStorage.setItem(dailyMarkerKey(), todayKey());
+  dailyClaimedToday = true;
+  await save();
+  activeTab = 'words';
+  render();
+  showToast('Three new words planted ✦');
 }
 
 function normalizeWords(items) {
@@ -195,47 +251,29 @@ function normalizeWords(items) {
     : word);
 }
 
-async function addDailyWords() {
-  const today = new Date().toISOString().slice(0, 10);
-  const markerKey = currentUser ? `wordwell-daily-${currentUser.id}` : 'wordwell-daily';
-  const previousDay = localStorage.getItem(markerKey);
-  if (!previousDay) { localStorage.setItem(markerKey, today); return; }
-  if (previousDay === today) return;
-
-  const dayNumber = Math.floor(Date.now() / 86400000);
-  const additions = [];
-  for (let offset = 0; additions.length < 3 && offset < dailyWordPool.length; offset += 1) {
-    const [term, definition] = dailyWordPool[(dayNumber * 3 + offset) % dailyWordPool.length];
-    if (words.some(word => word.term.toLowerCase() === term)) continue;
-    additions.push({ id: crypto.randomUUID(), term, definition, note: 'Daily word', level: 0, nextReview: Date.now() });
-  }
-  words.push(...additions);
-  localStorage.setItem(markerKey, today);
-  if (additions.length) await save();
-}
-
 async function loadWords() {
   const saved = JSON.parse(localStorage.getItem(localKey()) || 'null');
   if (supabase && currentUser) {
+    const { data: claim } = await supabase.from('daily_claims').select('day').eq('day', todayKey()).maybeSingle();
+    dailyClaimedToday = Boolean(claim);
     const { data, error } = await supabase.from('user_words').select('id,term,definition,note,level,next_review').order('created_at', { ascending: true });
     if (!error && data?.length) {
       words = data.map(row => ({ id: row.id, term: row.term, definition: row.definition, note: row.note || '', level: row.level || 0, nextReview: row.next_review || Date.now() }));
       localStorage.setItem(localKey(), JSON.stringify(words));
-      await addDailyWords();
       return;
     }
     if (error) console.error('[wordwell] Could not load words:', error.message);
   }
-  words = normalizeWords(saved || seedWords);
-  await save();
-  await addDailyWords();
+  words = normalizeWords(saved || (supabaseConfigured ? [] : seedWords));
+  dailyClaimedToday = localStorage.getItem(dailyMarkerKey()) === todayKey();
+  if (words.length) await save();
 }
 
 async function startApp() {
   if (!supabaseConfigured) {
     words = normalizeWords(JSON.parse(localStorage.getItem('wordwell-words') || 'null') || seedWords);
     localStorage.setItem('wordwell-words', JSON.stringify(words));
-    await addDailyWords();
+    dailyClaimedToday = localStorage.getItem(dailyMarkerKey()) === todayKey();
     render();
     return;
   }
@@ -246,7 +284,7 @@ async function startApp() {
   supabase.auth.onAuthStateChange(async (_event, session) => {
     currentUser = session?.user || null;
     if (currentUser) await loadWords();
-    else words = [];
+    else { words = []; dailyClaimedToday = false; }
     render();
   });
 }
