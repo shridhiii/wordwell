@@ -464,4 +464,7 @@ async function checkSentence(e) {
 }
 function showWord(id) { const w=words.find(x=>x.id===id); if(!w) return; activeTab='words'; app.innerHTML=`<main><section class="page detail"><button class="back" data-tab="words">← My words</button><p class="eyebrow">YOUR WORD</p><h1>${escape(w.term)}</h1><div class="definition"><span>YOUR DEFINITION</span><p>${escape(w.definition)}</p></div>${w.note?`<div class="note"><span>NOTE</span><p>${escape(w.note)}</p></div>`:''}<button class="secondary wide" id="practice-one">Practice this word  →</button></section></main>${nav()}<div class="toast" id="toast"></div>`; bindEvents(); document.querySelector('#practice-one').onclick=()=>{reviewQueue=[w];reviewIndex=0;activeTab='review';render();}; }
 function showToast(message) { const el=document.querySelector('#toast'); if(!el)return; el.textContent=message; el.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>el.classList.remove('show'),2500); }
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(error => console.warn('[wordwell] PWA setup unavailable:', error.message)));
+}
 startApp();
