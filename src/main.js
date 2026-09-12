@@ -262,7 +262,11 @@ async function saveProfile(event) {
   event.preventDefault();
   const username = new FormData(event.target).get('username').trim();
   const { error } = await supabase.from('profiles').upsert({ user_id: currentUser.id, username });
-  if (error) return showToast(error.code === '23505' ? 'That username is already taken.' : 'Could not save username.');
+  if (error) {
+    console.error('[wordwell] Could not save username:', error.message, error.code);
+    if (error.code === '42P01') return showToast('Family tables are not set up yet. Run the Supabase schema.');
+    return showToast(error.code === '23505' ? 'That username is already taken.' : `Could not save username: ${error.message}`);
+  }
   await loadFamily();
   render();
 }
