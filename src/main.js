@@ -42,6 +42,7 @@ let currentUser = null;
 let dailyClaimedToday = false;
 let authMode = 'login';
 let authMessage = '';
+let dailySession = { date: '', picks: [], index: 0, started: false };
 let activeTab = 'home';
 let reviewQueue = [];
 let reviewIndex = 0;
@@ -142,12 +143,22 @@ function dailyRecommendations() {
   return picks;
 }
 
+function getDailySession() {
+  const today = todayKey();
+  if (dailySession.date !== today) {
+    dailySession = { date: today, picks: dailyRecommendations(), index: 0, started: false };
+    if (dailyClaimedToday || localStorage.getItem(dailyMarkerKey()) === today) dailySession.index = dailySession.picks.length;
+  }
+  return dailySession;
+}
+
 function recommendationsView() {
-  const claimed = dailyClaimedToday || localStorage.getItem(dailyMarkerKey()) === todayKey();
-  const picks = claimed ? [] : dailyRecommendations();
+  const session = getDailySession();
+  const claimed = session.index >= session.picks.length;
+  const current = session?.picks[session.index];
   return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR DAILY GROWTH</p><h1>Discover</h1></div><div class="discover-spark">✦</div></header>
     <p class="discover-lede">Three thoughtful words, once a day. Choose the ones you want to plant.</p>
-    ${claimed ? `<div class="daily-complete"><span>✦</span><h3>You’ve planted today’s words.</h3><p>Come back tomorrow for three new recommendations.</p></div>` : picks.length ? `<div class="recommendation-list">${picks.map(word => `<article class="recommendation"><div class="word-marker level-0">✦</div><div><h3>${escape(word.term)}</h3><p>${escape(word.definition)}</p></div></article>`).join('')}</div><button class="primary wide" id="claim-daily">Plant these 3 words  →</button>` : `<div class="daily-complete"><span>✦</span><h3>Your garden is flourishing.</h3><p>We’ll have more recommendations soon.</p></div>`}
+    ${claimed ? `<div class="daily-complete"><span>✦</span><h3>You’ve learned today’s words.</h3><p>Come back tomorrow for three new words.</p></div>` : current ? `<p class="swipe-count">WORD ${session.index + 1} OF ${session.picks.length}</p><div class="swipe-card" id="swipe-card"><div class="swipe-card-mark">✦</div><h2>${escape(current.term)}</h2><p>${escape(current.definition)}</p><small>Swipe either direction to continue learning</small></div><div class="swipe-actions"><button class="swipe-no" data-swipe="left" aria-label="Previous learning card">←</button><button class="swipe-yes" data-swipe="right" aria-label="Next learning card">→</button></div>` : `<div class="daily-complete"><span>✦</span><h3>Your garden is flourishing.</h3><p>We’ll have more recommendations soon.</p></div>`}
   </section>`;
 }
 
@@ -187,6 +198,8 @@ function bindEvents() {
   document.querySelector('#toggle-auth')?.addEventListener('click', () => { authMode = authMode === 'login' ? 'signup' : 'login'; authMessage = ''; render(); });
   document.querySelector('#sign-out')?.addEventListener('click', signOut);
   document.querySelector('#claim-daily')?.addEventListener('click', claimDailyWords);
+  document.querySelectorAll('[data-swipe]').forEach(button => button.addEventListener('click', advanceDailyCard));
+  bindSwipeCard();
   document.querySelectorAll('[data-tab]').forEach(el => el.onclick = () => { activeTab=el.dataset.tab; render(); });
   document.querySelector('#start-review')?.addEventListener('click', () => { reviewQueue = dueWords(); reviewIndex=0; activeTab='review'; meaningRevealed=false; render(); });
   document.querySelector('#close-review')?.addEventListener('click', () => { activeTab='home'; render(); });
@@ -243,6 +256,39 @@ async function claimDailyWords() {
   activeTab = 'words';
   render();
   showToast('Three new words planted ✦');
+}
+
+function bindSwipeCard() {
+  const card = document.querySelector('#swipe-card');
+  if (!card) return;
+  let startX = 0;
+  card.addEventListener('pointerdown', event => { startX = event.clientX; card.setPointerCapture(event.pointerId); });
+  card.addEventListener('pointerup', event => {
+    const distance = event.clientX - startX;
+    if (Math.abs(distance) >= 70) advanceDailyCard();
+  });
+}
+
+async function advanceDailyCard() {
+  const session = getDailySession();
+  const picked = session.picks[session.index];
+  if (!picked) return;
+
+  if (!session.started) {
+    if (supabase && currentUser) {
+      const { error } = await supabase.from('daily_claims').insert({ user_id: currentUser.id, day: todayKey() });
+      if (error?.code === '23505') { dailyClaimedToday = true; session.index = session.picks.length; render(); return; }
+      if (error) { console.error('[wordwell] Could not save daily claim:', error.message); return showToast('Could not start today’s lesson.'); }
+    }
+    words.push(...session.picks.map(({ term, definition }) => ({ id: crypto.randomUUID(), term, definition, note: 'Daily lesson', level: 0, nextReview: Date.now() })));
+    localStorage.setItem(dailyMarkerKey(), todayKey());
+    dailyClaimedToday = true;
+    session.started = true;
+    await save();
+  }
+  session.index += 1;
+  render();
+  if (session.index >= session.picks.length) showToast('Daily lesson complete ✦');
 }
 
 function normalizeWords(items) {
