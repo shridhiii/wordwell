@@ -40,6 +40,9 @@ const dailyWordPool = [
 let words = [];
 let currentUser = null;
 let dailyClaimedToday = false;
+let familyProfile = null;
+let familyInfo = null;
+let familyMembers = [];
 let authMode = 'login';
 let authMessage = '';
 let dailySession = { date: '', picks: [], index: 0, started: false };
@@ -72,7 +75,7 @@ const greeting = () => new Date().getHours() < 12 ? 'Good morning' : new Date().
 
 function nav() {
   return `<nav class="bottom-nav">
-    ${[['home','⌂','Today'],['words','☷','My words'],['recommend','✦','Discover'],['add','＋','Add word']].map(([id,icon,label]) => `<button class="nav-item ${activeTab===id?'active':''}" data-tab="${id}"><span>${icon}</span>${label}</button>`).join('')}
+    ${[['home','⌂','Today'],['words','☷','My words'],['recommend','✦','Discover'],['family','♧','Family'],['add','＋','Add word']].map(([id,icon,label]) => `<button class="nav-item ${activeTab===id?'active':''}" data-tab="${id}"><span>${icon}</span>${label}</button>`).join('')}
   </nav>`;
 }
 
@@ -82,7 +85,7 @@ function render() {
     bindEvents();
     return;
   }
-  const views = { home: homeView, words: wordsView, recommend: recommendationsView, add: addView, review: reviewView };
+  const views = { home: homeView, words: wordsView, recommend: recommendationsView, family: familyView, add: addView, review: reviewView };
   app.innerHTML = `<main>${views[activeTab]()}</main>${activeTab !== 'review' ? nav() : ''}<div class="toast" id="toast"></div>`;
   bindEvents();
 }
@@ -162,6 +165,14 @@ function recommendationsView() {
   </section>`;
 }
 
+function familyView() {
+  if (!supabaseConfigured) return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR CIRCLE</p><h1>Family</h1></div></header><div class="daily-complete"><span>♧</span><h3>Connect Supabase to use Family Circle.</h3><p>This feature needs accounts and cloud storage.</p></div></section>`;
+  if (!familyProfile) return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR CIRCLE</p><h1>Family</h1></div></header><p class="discover-lede">Choose a username so your friends know who is learning.</p><form id="profile-form" class="word-form"><label>USERNAME<input name="username" required minlength="2" maxlength="24" pattern="[A-Za-z0-9_]+" placeholder="e.g. shridhik" /></label><button class="primary wide" type="submit">Save username  →</button></form></section>`;
+  if (!familyInfo) return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR CIRCLE</p><h1>Family</h1></div></header><p class="discover-lede">Welcome, ${escape(familyProfile.username)}. Create a private circle or join one with an invite code.</p><form id="create-family-form" class="word-form"><label>CREATE A CIRCLE<input name="name" required maxlength="40" placeholder="The Wordwell family" /></label><button class="primary wide" type="submit">Create circle  →</button></form><div class="family-divider">or join an existing circle</div><form id="join-family-form" class="word-form"><label>INVITE CODE<input name="code" required maxlength="16" placeholder="WW-ABC123" /></label><button class="secondary wide" type="submit">Join circle</button></form></section>`;
+  const today = new Date().toISOString().slice(0, 10);
+  return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR CIRCLE</p><h1>${escape(familyInfo.name)}</h1></div><div class="discover-spark">♧</div></header><div class="invite-box"><span>INVITE CODE</span><strong>${escape(familyInfo.invite_code)}</strong><small>Share this code with family and friends.</small></div><div class="section-heading"><h3>Learning together</h3><span>${familyMembers.length} member${familyMembers.length === 1 ? '' : 's'}</span></div><div class="family-list">${familyMembers.map(member => `<article class="family-row"><div class="word-marker level-2">${escape(member.username[0].toUpperCase())}</div><div><h3>${escape(member.username)}${member.user_id === currentUser?.id ? ' (you)' : ''}</h3><p>${member.today} today · ${member.total} total</p></div><strong>${member.today}</strong></article>`).join('')}</div></section>`;
+}
+
 function wordRows(items) {
   if (!items.length) return `<div class="empty"><div>✦</div><h3>No matches yet</h3><p>Add a new word to begin your collection.</p></div>`;
   return items.sort((a,b)=>a.term.localeCompare(b.term)).map(w => `<article class="word-row" data-word="${w.id}"><div class="word-marker level-${w.level}">${w.level >= 2 ? '✓' : '•'}</div><div><h3>${escape(w.term)}</h3><p>${escape(w.definition)}</p></div><span>›</span></article>`).join('');
@@ -198,6 +209,9 @@ function bindEvents() {
   document.querySelector('#toggle-auth')?.addEventListener('click', () => { authMode = authMode === 'login' ? 'signup' : 'login'; authMessage = ''; render(); });
   document.querySelector('#sign-out')?.addEventListener('click', signOut);
   document.querySelector('#claim-daily')?.addEventListener('click', claimDailyWords);
+  document.querySelector('#profile-form')?.addEventListener('submit', saveProfile);
+  document.querySelector('#create-family-form')?.addEventListener('submit', createFamily);
+  document.querySelector('#join-family-form')?.addEventListener('submit', joinFamily);
   document.querySelectorAll('[data-swipe]').forEach(button => button.addEventListener('click', advanceDailyCard));
   bindSwipeCard();
   document.querySelectorAll('[data-tab]').forEach(el => el.onclick = () => { activeTab=el.dataset.tab; render(); });
@@ -237,8 +251,75 @@ async function signOut() {
   currentUser = null;
   words = [];
   dailyClaimedToday = false;
+  familyProfile = null;
+  familyInfo = null;
+  familyMembers = [];
   activeTab = 'home';
   render();
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  const username = new FormData(event.target).get('username').trim();
+  const { error } = await supabase.from('profiles').upsert({ user_id: currentUser.id, username });
+  if (error) return showToast(error.code === '23505' ? 'That username is already taken.' : 'Could not save username.');
+  await loadFamily();
+  render();
+}
+
+function makeInviteCode() { return `WW-${Math.random().toString(36).slice(2, 8).toUpperCase()}`; }
+
+async function createFamily(event) {
+  event.preventDefault();
+  const name = new FormData(event.target).get('name').trim();
+  const family = { id: crypto.randomUUID(), name, invite_code: makeInviteCode(), created_by: currentUser.id };
+  const { error: familyError } = await supabase.from('families').insert(family);
+  if (familyError) return showToast('Could not create circle.');
+  const { error: memberError } = await supabase.from('family_members').insert({ family_id: family.id, user_id: currentUser.id });
+  if (memberError) return showToast('Circle created, but membership could not be saved.');
+  await loadFamily();
+  render();
+}
+
+async function joinFamily(event) {
+  event.preventDefault();
+  const code = new FormData(event.target).get('code').trim().toUpperCase();
+  const { data: family, error } = await supabase.from('families').select('id').eq('invite_code', code).maybeSingle();
+  if (error || !family) return showToast('That invite code was not found.');
+  const { error: joinError } = await supabase.from('family_members').insert({ family_id: family.id, user_id: currentUser.id });
+  if (joinError && joinError.code !== '23505') return showToast('Could not join that circle.');
+  await loadFamily();
+  render();
+}
+
+async function loadFamily() {
+  if (!supabase || !currentUser) return;
+  const { data: profile } = await supabase.from('profiles').select('user_id,username').eq('user_id', currentUser.id).maybeSingle();
+  familyProfile = profile || null;
+  familyInfo = null;
+  familyMembers = [];
+  if (!familyProfile) return;
+  const { data: memberships } = await supabase.from('family_members').select('family_id').eq('user_id', currentUser.id);
+  const familyIds = (memberships || []).map(row => row.family_id);
+  if (!familyIds.length) return;
+  const { data: families } = await supabase.from('families').select('id,name,invite_code').in('id', familyIds).limit(1);
+  familyInfo = families?.[0] || null;
+  if (!familyInfo) return;
+  const { data: members } = await supabase.from('family_members').select('user_id').eq('family_id', familyInfo.id);
+  const memberIds = (members || []).map(row => row.user_id);
+  const { data: profiles } = await supabase.from('profiles').select('user_id,username').in('user_id', memberIds);
+  const { data: completions } = await supabase.from('completed_words').select('user_id,completed_at').in('user_id', memberIds);
+  const today = new Date().toISOString().slice(0, 10);
+  familyMembers = (profiles || []).map(profileRow => {
+    const mine = (completions || []).filter(row => row.user_id === profileRow.user_id);
+    return { ...profileRow, total: mine.length, today: mine.filter(row => row.completed_at.slice(0, 10) === today).length };
+  }).sort((a, b) => b.today - a.today || b.total - a.total);
+}
+
+async function recordCompletion(wordId) {
+  if (!supabase || !currentUser) return;
+  const { error } = await supabase.from('completed_words').insert({ id: crypto.randomUUID(), user_id: currentUser.id, word_id: String(wordId) });
+  if (error && error.code !== '23505') console.error('[wordwell] Could not record completion:', error.message);
 }
 
 async function claimDailyWords() {
@@ -287,6 +368,7 @@ async function advanceDailyCard() {
     await save();
   }
   session.index += 1;
+  await recordCompletion(picked.term);
   render();
   if (session.index >= session.picks.length) showToast('Daily lesson complete ✦');
 }
@@ -325,18 +407,18 @@ async function startApp() {
   }
   const { data } = await supabase.auth.getSession();
   currentUser = data.session?.user || null;
-  if (currentUser) await loadWords();
+  if (currentUser) { await loadWords(); await loadFamily(); }
   render();
   supabase.auth.onAuthStateChange(async (_event, session) => {
     currentUser = session?.user || null;
-    if (currentUser) await loadWords();
+    if (currentUser) { await loadWords(); await loadFamily(); }
     else { words = []; dailyClaimedToday = false; }
     render();
   });
 }
 
 function addWord(e) { e.preventDefault(); const data = new FormData(e.target); const term=data.get('term').trim(); if (words.some(w=>w.term.toLowerCase()===term.toLowerCase())) return showToast('That word is already in your garden.'); words.unshift({id:crypto.randomUUID(), term, definition:data.get('definition').trim(), note:data.get('note').trim(), level:0, nextReview:Date.now()}); save(); activeTab='words'; render(); showToast('New word planted ✦'); }
-function finishCard(grade) { const word=reviewQueue[reviewIndex]; const days = grade==='easy'?7:grade==='good'?3:1; word.level = grade==='again'?Math.max(0,word.level-1):Math.min(3,word.level+1); word.nextReview=Date.now()+days*86400000; save(); reviewIndex++; meaningRevealed=false; render(); }
+function finishCard(grade) { const word=reviewQueue[reviewIndex]; const days = grade==='easy'?7:grade==='good'?3:1; word.level = grade==='again'?Math.max(0,word.level-1):Math.min(3,word.level+1); word.nextReview=Date.now()+days*86400000; save(); recordCompletion(word.id); reviewIndex++; meaningRevealed=false; render(); }
 async function checkSentence(e) {
   e.preventDefault();
   const form = document.querySelector('#sentence-form');
