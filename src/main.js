@@ -157,11 +157,10 @@ function getDailySession() {
 
 function recommendationsView() {
   const session = getDailySession();
-  const claimed = session.index >= session.picks.length;
-  const current = session?.picks[session.index];
+  const claimed = dailyClaimedToday || localStorage.getItem(dailyMarkerKey()) === todayKey();
   return `<section class="page words-page"><header class="simple-head"><div><p class="eyebrow">YOUR DAILY GROWTH</p><h1>Discover</h1></div><div class="discover-spark">✦</div></header>
     <p class="discover-lede">Three thoughtful words, once a day. Choose the ones you want to plant.</p>
-    ${claimed ? `<div class="daily-complete"><span>✦</span><h3>You’ve learned today’s words.</h3><p>Come back tomorrow for three new words.</p></div>` : current ? `<p class="swipe-count">WORD ${session.index + 1} OF ${session.picks.length}</p><div class="swipe-card" id="swipe-card"><div class="swipe-card-mark">✦</div><h2>${escape(current.term)}</h2><p>${escape(current.definition)}</p><small>Swipe either direction to continue learning</small></div><div class="swipe-actions"><button class="swipe-no" data-swipe="left" aria-label="Previous learning card">←</button><button class="swipe-yes" data-swipe="right" aria-label="Next learning card">→</button></div>` : `<div class="daily-complete"><span>✦</span><h3>Your garden is flourishing.</h3><p>We’ll have more recommendations soon.</p></div>`}
+    ${claimed ? `<div class="daily-complete"><span>✦</span><h3>You’ve received today’s words.</h3><p>Come back tomorrow for three new recommendations.</p></div>` : session.picks.length ? `<div class="recommendation-list">${session.picks.map(word => `<article class="recommendation"><div class="word-marker level-0">✦</div><div><h3>${escape(word.term)}</h3><p>${escape(word.definition)}</p></div></article>`).join('')}</div><button class="primary wide" id="start-daily-lesson">Start today’s lesson  →</button>` : `<div class="daily-complete"><span>✦</span><h3>Your garden is flourishing.</h3><p>We’ll have more recommendations soon.</p></div>`}
   </section>`;
 }
 
@@ -198,7 +197,7 @@ function reviewView() {
     <div class="review-content"><p class="eyebrow">${reviewIndex % 2 ? 'MEANING CHECK' : 'SENTENCE CHALLENGE'}</p>
       <h1>${reviewIndex % 2 ? 'What does this word mean?' : `Use “${escape(word.term)}” in a sentence.`}</h1>
       <article class="review-word"><span>WORD</span><h2>${escape(word.term)}</h2></article>
-      ${reviewIndex % 2 ? `<div class="meaning-area ${meaningRevealed?'revealed':''}">${meaningRevealed ? `<p>${escape(word.definition)}</p><small>How familiar did this feel?</small><div class="grade-row"><button data-grade="again">Again</button><button data-grade="good">Good</button><button data-grade="easy">Easy</button></div>` : `<button id="reveal-meaning" class="secondary wide">Reveal meaning</button>`}</div>` : `<form id="sentence-form"><textarea id="sentence" required placeholder="Write a sentence that makes the meaning clear..."></textarea><button class="primary wide" type="submit">Check my sentence  →</button></form>`}
+      ${reviewIndex % 2 ? `<div class="meaning-area ${meaningRevealed?'revealed':''}">${meaningRevealed ? `<p>${escape(word.definition)}</p><small>How familiar did this feel?</small><div class="grade-row"><button data-grade="again">Again</button><button data-grade="good">Good</button><button data-grade="easy">Easy</button></div>` : `<div class="meaning-swipe-card" id="meaning-swipe-card"><span>Do you remember this?</span><h3>${escape(word.term)}</h3><small>Swipe right if you know it · swipe left to reveal</small></div><button id="reveal-meaning" class="secondary wide">Tap to reveal meaning</button>`}</div>` : `<form id="sentence-form"><textarea id="sentence" required placeholder="Write a sentence that makes the meaning clear..."></textarea><button class="primary wide" type="submit">Check my sentence  →</button></form>`}
     </div></section>`;
 }
 
@@ -209,6 +208,7 @@ function bindEvents() {
   document.querySelector('#toggle-auth')?.addEventListener('click', () => { authMode = authMode === 'login' ? 'signup' : 'login'; authMessage = ''; render(); });
   document.querySelector('#sign-out')?.addEventListener('click', signOut);
   document.querySelector('#claim-daily')?.addEventListener('click', claimDailyWords);
+  document.querySelector('#start-daily-lesson')?.addEventListener('click', startDailyLesson);
   document.querySelector('#profile-form')?.addEventListener('submit', saveProfile);
   document.querySelector('#create-family-form')?.addEventListener('submit', createFamily);
   document.querySelector('#join-family-form')?.addEventListener('submit', joinFamily);
@@ -219,6 +219,7 @@ function bindEvents() {
   document.querySelector('#close-review')?.addEventListener('click', () => { activeTab='home'; render(); });
   document.querySelector('#finish-review')?.addEventListener('click', () => { activeTab='home'; render(); });
   document.querySelector('#reveal-meaning')?.addEventListener('click', () => { meaningRevealed=true; render(); });
+  bindMeaningSwipe();
   document.querySelectorAll('[data-grade]').forEach(btn => btn.onclick = () => finishCard(btn.dataset.grade));
   document.querySelector('#add-form')?.addEventListener('submit', addWord);
   document.querySelector('#sentence-form')?.addEventListener('submit', checkSentence);
@@ -343,14 +344,75 @@ async function claimDailyWords() {
   showToast('Three new words planted ✦');
 }
 
+async function startDailyLesson() {
+  const session = getDailySession();
+  if (dailyClaimedToday || localStorage.getItem(dailyMarkerKey()) === todayKey()) return showToast('Today’s words are already received.');
+  if (supabase && currentUser) {
+    const { error } = await supabase.from('daily_claims').insert({ user_id: currentUser.id, day: todayKey() });
+    if (error?.code === '23505') { dailyClaimedToday = true; render(); return; }
+    if (error) { console.error('[wordwell] Could not save daily claim:', error.message); return showToast('Could not start today’s lesson.'); }
+  }
+  const newWords = session.picks.map(({ term, definition }) => ({ id: crypto.randomUUID(), term, definition, note: 'Daily lesson', level: 0, nextReview: Date.now() }));
+  words.push(...newWords);
+  localStorage.setItem(dailyMarkerKey(), todayKey());
+  dailyClaimedToday = true;
+  await save();
+  reviewQueue = newWords;
+  reviewIndex = 0;
+  activeTab = 'review';
+  meaningRevealed = false;
+  render();
+}
+
 function bindSwipeCard() {
   const card = document.querySelector('#swipe-card');
   if (!card) return;
   let startX = 0;
-  card.addEventListener('pointerdown', event => { startX = event.clientX; card.setPointerCapture(event.pointerId); });
-  card.addEventListener('pointerup', event => {
+  let dragging = false;
+  card.addEventListener('pointerdown', event => { startX = event.clientX; dragging = true; card.style.transition = 'none'; card.setPointerCapture(event.pointerId); });
+  card.addEventListener('pointermove', event => {
+    if (!dragging) return;
     const distance = event.clientX - startX;
-    if (Math.abs(distance) >= 70) advanceDailyCard();
+    card.style.transform = `translateX(${distance}px) rotate(${distance / 18}deg)`;
+    card.style.opacity = String(Math.max(0.65, 1 - Math.abs(distance) / 500));
+  });
+  card.addEventListener('pointerup', event => {
+    if (!dragging) return;
+    dragging = false;
+    const distance = event.clientX - startX;
+    if (Math.abs(distance) >= 70) {
+      card.style.transition = 'transform .18s ease, opacity .18s ease';
+      card.style.transform = `translateX(${distance > 0 ? 700 : -700}px) rotate(${distance > 0 ? 18 : -18}deg)`;
+      card.style.opacity = '0';
+      setTimeout(advanceDailyCard, 150);
+    } else {
+      card.style.transition = 'transform .2s ease, opacity .2s ease';
+      card.style.transform = '';
+      card.style.opacity = '';
+    }
+  });
+  card.addEventListener('pointercancel', () => { dragging = false; card.style.transform = ''; card.style.opacity = ''; });
+}
+
+function bindMeaningSwipe() {
+  const card = document.querySelector('#meaning-swipe-card');
+  if (!card) return;
+  let startX = 0;
+  let dragging = false;
+  card.addEventListener('pointerdown', event => { startX = event.clientX; dragging = true; card.style.transition = 'none'; card.setPointerCapture(event.pointerId); });
+  card.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    const distance = event.clientX - startX;
+    card.style.transform = `translateX(${distance}px) rotate(${distance / 18}deg)`;
+    card.style.opacity = String(Math.max(0.65, 1 - Math.abs(distance) / 500));
+  });
+  card.addEventListener('pointerup', event => {
+    if (!dragging) return;
+    dragging = false;
+    const distance = event.clientX - startX;
+    if (Math.abs(distance) < 70) { card.style.transition = 'transform .2s ease, opacity .2s ease'; card.style.transform = ''; card.style.opacity = ''; return; }
+    if (distance > 0) finishCard('good');
+    else { meaningRevealed = true; render(); }
   });
 }
 
